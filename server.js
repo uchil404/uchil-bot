@@ -1,145 +1,134 @@
-const discord = require("discord.js");
-const client = new discord.Client({disableMentions:"everyone"})
-const db = new Map()
-const fs = require("fs")
-const snek = require("node-superfetch")
+// server.js
+require('dotenv').config();
+const { Client, GatewayIntentBits, Collection, Partials, ActivityType } = require('discord.js');
+const { joinVoiceChannel, getVoiceConnection } = require('@discordjs/voice');
+const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const play = require('play-dl');
 
-const express = require("express");
-const app = express();
-app.get("/", (request, response) => {
-  console.log("Pinging");
-  response.sendStatus(200);
-})
-app.listen(process.env.PORT);
-
-const { prefix } = require("./config.json")
-client.aliases = new discord.Collection();
-client.commands = new discord.Collection();
-client.prefix = prefix
-client.queue = new Map()
-client.hastebin = async(text) => {
-  const { body } = await snek.post("https://bin-clientdev.glitch.me/documents")
-  .send(text);
-  return `https://bin-clientdev.glitch.me/${body.key}`
-}
-
-//event
-client.on('ready', () => {
-  console.log(`${client.user.tag} ready to serving ${client.guilds.cache.size} guild(s) and ${client.users.cache.size} user(s), with ${client.commands.size} command(s) total!`)
-  client.user.setActivity("Uchil Squads", {type:"LISTENING"})
+// Inisialisasi play-dl
+play.setToken({
+  youtube: {
+    cookie: process.env.YOUTUBE_COOKIE || null
+  }
 });
 
-const commandFile = fs.readdirSync("./commands").filter(file => file.endsWith(".js"));
-commandFile.forEach(file => {
-  const command = require(`./commands/${file}`)
-  client.commands.set(command.name, command);
-  if(command.alias) {
-  command.alias.forEach(alias => {
-  client.aliases.set(alias, command);
-  })
-  }
-  console.log(`Loaded command ${command.name} with alias(es) => ${command.alias}`)
-  })
+// Inisialisasi Client Discord.js v14
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMembers
+  ],
+  partials: [Partials.Channel, Partials.Message, Partials.Reaction]
+});
 
-client.on('message', msg => {
-  if(msg.author.bot) return;
-  if(!msg.guild) return;
+// Koleksi global
+client.commands = new Collection();
+client.aliases = new Collection();
+client.cooldowns = new Collection();
+client.musicQueues = new Map(); // guildId -> queue data
+
+// Load konfigurasi
+const config = require('./config.json');
+client.config = config;
+client.prefix = process.env.PREFIX || config.prefix;
+
+// Load command handler
+require('./handler/commandHandler')(client);
+
+// Event: Ready
+client.once('ready', async () => {
+  console.log(`✅ ${client.user.tag} online!`);
+  console.log(`📊 Serving ${client.guilds.cache.size} guild(s)`);
+  console.log(`🎮 Activity: ${client.prefix}help`);
   
-  if(msg.content == `<@${client.user.id}>`){
-    const embed = new discord.MessageEmbed()
-    .setDescription(`:wave: | My prefix is ${prefix}`)
-    .setColor("RANDOM")
-    .setFooter("© Richo uchil ")
-    msg.channel.send(embed)
+  client.user.setActivity(`${client.prefix}help`, { type: ActivityType.Listening });
+    // Refresh token play-dl jika perlu
+  if (await play.is_expired()) {
+    await play.refreshToken();
   }
-  if(msg.content == prefix) {
-    const embed = new discord.MessageEmbed()
-    .setDescription(`Hey, It's me!
-You can type ${prefix}help to get bot commands list`)
-    .setColor("RANDOM")
-    .setFooter("© Richo uchil")
-    return msg.channel.send(embed)
-  }
-  let args = msg.content.slice(prefix.length).trim().split(" ");
-  let cmd = args.shift().toLowerCase();
-  if(!msg.content.startsWith(prefix)) return;
+});
+
+// Event: Message Handler (v14: messageCreate)
+client.on('messageCreate', async (message) => {
+  // Filter dasar
+  if (message.author.bot || !message.guild || !message.content.startsWith(client.prefix)) return;
+
+  // Parse command
+  const args = message.content.slice(client.prefix.length).trim().split(/ +/);
+  const commandName = args.shift().toLowerCase();
   
+  // Resolve command
+  const command = client.commands.get(commandName) || 
+                 client.aliases.get(commandName);
+  
+  if (!command) {
+    // Handle mention bot
+    if (message.content === `<@${client.user.id}>` || message.content === `<@!${client.user.id}>`) {
+      return message.reply(`👋 Halo! Prefix saya adalah \`${client.prefix}\`\nGunakan \`${client.prefix}help\` untuk daftar command.`);
+    }
+    return;
+  }
+
+  // Permission check
+  if (command.permissions) {
+    if (!message.member.permissions.has(command.permissions)) {
+      return message.reply('❌ Anda tidak memiliki izin untuk menggunakan command ini.');
+    }
+  }
+
+  // Cooldown per-command
+  if (!client.cooldowns.has(command.name)) {
+    client.cooldowns.set(command.name, new Collection());
+  }
+  const timestamps = client.cooldowns.get(command.name);
+  const cooldownAmount = (command.cooldown || 3) * 1000;
+
+  if (timestamps.has(message.author.id)) {
+    const expirationTime = timestamps.get(message.author.id) + cooldownAmount;
+    if (Date.now() < expirationTime) {
+      const timeLeft = (expirationTime - Date.now()) / 1000;
+      return message.reply(`⏱️ Mohon tunggu ${timeLeft.toFixed(1)} detik sebelum menggunakan \`${command.name}\` kembali.`);
+    }
+  }
+
+  timestamps.set(message.author.id, Date.now());  setTimeout(() => timestamps.delete(message.author.id), cooldownAmount);
+
+  // Execute command
   try {
-    const file = client.commands.get(cmd) || client.aliases.get(cmd)
-    if(!file) return msg.reply("Command that you want doesn't exist.")
-    
-    const now = Date.now()
-   if (db.has(`cooldown_${msg.author.id}`)) {
-	const expirationTime = db.get(`cooldown_${msg.author.id}`) + 3000;
-	if (now < expirationTime) {
-		const timeLeft = (expirationTime - now) / 1000;
-		return msg.reply(`please wait ${timeLeft.toFixed(1)} more second(s) before reusing the \`${file.name}\` command.`);
-	}
-}
-  db.set(`cooldown_${msg.author.id}`, now);
-  setTimeout(() => {
-    db.delete(`cooldown_${msg.author.id}`)
-  },3000)
-    
-    file.run(client, msg, args)
-  } catch (err) {
-    console.error(err)
-  } finally {
-    console.log(`${msg.author.tag} using ${cmd} in ${msg.channel.name} | ${msg.guild.name}`)
-  }
-}) 
-client.on('message', async  message => {
-  if (message.content === "Halo") {
-message.channel.send('Halo juga teman');
+    await command.execute(client, message, args);
+  } catch (error) {
+    console.error(`❌ Error executing ${commandName}:`, error);
+    message.reply('⚠️ Terjadi kesalahan saat memproses command tersebut.').catch(() => {});
   }
 });
 
-client.on('message', async  message => {
-  if (message.content === "Sam") {
-message.channel.send('Sam bau');
-  }
+// Event: Error handling global
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection:', reason);
 });
-client.on('message', async  message => {
-  if (message.content === "Malam") {
-message.channel.send('Malam juga teman selamat istirahat');
-  }
-});
-client.on('message', async  message => {
-  if (message.content === "Pagi") {
-message.channel.send('Pagi juga teman selamat beraktivitas');
-  }
-});
-client.on('message', async  message => {
-  if (message.content === "Siang") {
-message.channel.send('Siang juga teman Jangan lupa makan');
-  }
+process.on('uncaughtException', (err) => {
+  console.error('❌ Uncaught Exception:', err);
+  process.exit(1);
 });
 
-client.on('message', async  message => {
-  if (message.content === "IG uchil") {
-message.channel.send('https://www.instagram.com/richo_uchil/');
-  }
+// Health check endpoint (untuk hosting gratis)
+const app = express();
+app.get('/', (req, res) => {
+  res.status(200).send({ status: 'ok', uptime: process.uptime() });
 });
- client.on('message', async  message => {
-  if (message.content === "YT uchil") {
-message.channel.send('https://www.youtube.com/channel/UC5QblX64jgH4icMcDd0hbXw');
-  }
-});
-client.on('message', async  message => {
-  if (message.content === "DC uchil") {
-message.channel.send('https://discord.gg/9Ep2nxM');
-  }
-});
-client.on('message', async  message => {
-  if (message.content === "BORNG") {
-message.channel.send('KANG NYOLONG KOTAK AMAL');
-  }
-});
-client.on('message', async  message => {
-  if (message.content === "Malam BORNG") {
-message.channel.send('MALAM KANG NYOLONG KOTAK AMAL');
-  }
+app.listen(process.env.PORT || 3000, () => {
+  console.log(`🌐 Health server running on port ${process.env.PORT || 3000}`);
 });
 
+// Login bot
+client.login(process.env.DISCORD_TOKEN).catch(err => {
+  console.error('❌ Failed to login:', err.message);
+  process.exit(1);
+});
 
-client.login(process.env.TOKEN)
+module.exports = { client, play };
