@@ -1,0 +1,36 @@
+// handler/commandHandler.js
+const fs = require('fs');
+const path = require('path');
+
+module.exports = (client) => {
+  const commandsPath = path.join(__dirname, '../commands');
+  
+  // Perbaiki: cek folder 'commands', fallback ke 'commads' jika typo masih ada
+  const actualPath = fs.existsSync(commandsPath) ? commandsPath : path.join(__dirname, '../commads');
+  
+  const commandFiles = fs.readdirSync(actualPath).filter(file => file.endsWith('.js'));
+  
+  for (const file of commandFiles) {
+    try {
+      const command = require(path.join(actualPath, file));
+      
+      if (command.name) {
+        client.commands.set(command.name, command);
+        console.log(`✅ Loaded: ${command.name}`);
+        
+        // Register aliases
+        if (Array.isArray(command.aliases)) {
+          for (const alias of command.aliases) {
+            client.aliases.set(alias, command);
+          }
+        }
+      } else {
+        console.warn(`⚠️ Skipping ${file}: missing 'name' property`);
+      }
+    } catch (error) {
+      console.error(`❌ Failed to load ${file}:`, error.message);
+    }
+  }
+  
+  console.log(`📦 Total commands loaded: ${client.commands.size}`);
+};
