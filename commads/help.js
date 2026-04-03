@@ -1,23 +1,41 @@
-const Discord = require('discord.js');
+// commands/help.js
+const { EmbedBuilder } = require('discord.js');
+const fs = require('fs');
+const path = require('path');
 
- module.exports = {
-  name: "help", //masukin nama commandnya disini
-  alias:["command","h"], //ini alias/singkatan gitu jadi bisa trigger command pake !help !h dll
-  description: "List of command", //ini tuh deskripsinya, cuman mungkin sekarang udah ga guna
-  run: async(client, message) => {
-  const exampleEmbed = new Discord.MessageEmbed()
-	.setColor('#0099ff')
-	.setTitle('Command List~')
-	.setThumbnail('https://lh4.googleusercontent.com/proxy/fE3XEuZT6-AWEdHNtJJXK6bSrInLUqQPc29d4fHkhrJRDpUXrKylILyKPwkINOb86FAwhnlVRv9CZXEWrYp3da6HJ-igGeoN6zGhSboyXotPDo3YwpCn2f3vdvBZdcBSWPMJ=w220-h220')
-	.addFields(
-		{ name: 'music', value: '`play`, `pause`, `volume`, `stop`, `pause`', inline: true},
-		{ name: 'Moderation', value: '`Ban`, `warn`, `kick`, `mute`, `unmute`', inline: true },
-    { name: 'Info', value: '`Ping`, `Avatar`', inline: true},
-    { name: 'Support Us!', value: '[Invite me here!](https://discord.com/oauth2/authorize?client_id=760923567360966690&scope=bot&permissions=2146958847)', inline: true },
-	)
-	.setTimestamp()
-	.setFooter(`Requested by ${message.author.username}`);
-
-message.channel.send(exampleEmbed);
-}
- };
+module.exports = {
+  name: 'help',
+  aliases: ['h', 'bantuan', 'command'],
+  description: 'Menampilkan daftar command yang tersedia',
+  cooldown: 10,
+  
+  async execute(client, message, args) {
+    const prefix = client.prefix;
+    const commands = Array.from(client.commands.values())
+      .filter(cmd => !cmd.ownerOnly || message.author.id === client.config.ownerId);
+    
+    const embed = new EmbedBuilder()
+      .setColor(client.config.embedColor || '#5865F2')
+      .setTitle('📚 Daftar Command')
+      .setDescription(`Gunakan \`${prefix}<command>\` untuk menjalankan command.\n\n**Total Command:** ${commands.length}`)
+      .setFooter({ text: client.config.footerText || '© Uchil Bot' })
+      .setTimestamp();
+    
+    // Group commands by category (opsional)
+    const categories = {
+      '🎵 Musik': ['play', 'skip', 'pause', 'resume', 'queue', 'stop'],
+      'ℹ️ Info': ['ping', 'help', 'invite', 'stats'],
+      '🔧 Utility': ['prefix', 'serverinfo', 'userinfo']
+    };
+    
+    for (const [category, cmds] of Object.entries(categories)) {
+      const available = commands.filter(c => cmds.includes(c.name) && !c.ownerOnly);
+      if (available.length) {
+        const desc = available.map(c => `\`${c.name}\` - ${c.description || 'Tanpa deskripsi'}`).join('\n');
+        embed.addFields({ name: category, value: desc, inline: false });
+      }
+    }
+    
+    await message.reply({ embeds: [embed] });
+  }
+};
