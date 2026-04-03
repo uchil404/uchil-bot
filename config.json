@@ -1,5 +1,6 @@
 {
-    "prefix":"U/",
-    "ownerID": ["691915497221914666"]
-  }
-  
+  "prefix": "U/",
+  "ownerId": "691915497221914666",
+  "embedColor": "#5865F2",
+  "footerText": "© Uchil Bot"
+}
